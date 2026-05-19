@@ -6,11 +6,11 @@ import { useEffect, useState, Suspense } from "react";
 type Integration = { provider: string; last_sync_at: string | null; sync_enabled: boolean };
 
 const connectors = [
-  { name: "Strava", icon: "🟠", provider: "strava", available: true },
-  { name: "Garmin", icon: "🔵", provider: "garmin", available: false },
-  { name: "Apple Health", icon: "❤️", provider: "apple_health", available: false },
-  { name: "Fitbit", icon: "🟢", provider: "fitbit", available: false },
-  { name: "Polar", icon: "⚪", provider: "polar", available: false },
+  { name: "Strava", icon: "🟠", provider: "strava", envKey: "STRAVA_CLIENT_ID" },
+  { name: "Garmin", icon: "🔵", provider: "garmin", envKey: "GARMIN_CLIENT_ID" },
+  { name: "Fitbit", icon: "🟢", provider: "fitbit", envKey: "FITBIT_CLIENT_ID" },
+  { name: "Polar", icon: "⚪", provider: "polar", envKey: "POLAR_CLIENT_ID" },
+  { name: "Apple Health", icon: "❤️", provider: "apple_health", envKey: null },
 ];
 
 function SettingsContent() {
@@ -18,16 +18,23 @@ function SettingsContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [integrations, setIntegrations] = useState<Integration[]>([]);
-  const [syncing, setSyncing] = useState(false);
+  const [syncing, setSyncing] = useState<string | null>(null);
   const [toast, setToast] = useState("");
 
   useEffect(() => {
     const success = searchParams.get("success");
     const error = searchParams.get("error");
-    if (success === "strava") setToast("✅ Strava connecté avec succès !");
-    if (error) setToast("❌ Erreur de connexion : " + error);
-    if (success || error) setTimeout(() => setToast(""), 4000);
-
+    if (success) {
+      setToast(`✅ ${success.charAt(0).toUpperCase() + success.slice(1)} connecté avec succès !`);
+      // Clean URL
+      window.history.replaceState({}, "", "/settings");
+    }
+    if (error) {
+      const provider = error.split("_")[0];
+      setToast(`❌ Erreur de connexion ${provider} : ${error}`);
+      window.history.replaceState({}, "", "/settings");
+    }
+    if (success || error) setTimeout(() => setToast(""), 5000);
     loadIntegrations();
   }, [searchParams]);
 
@@ -40,29 +47,34 @@ function SettingsContent() {
   const getIntegration = (provider: string) => integrations.find((i) => i.provider === provider);
 
   const handleConnect = (provider: string) => {
-    if (provider === "strava") {
-      window.location.href = "/api/integrations/strava";
-    }
+    window.location.href = `/api/integrations/${provider}`;
   };
 
   const handleDisconnect = async (provider: string) => {
-    await supabase.from("integrations").delete().eq("provider", provider);
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    await supabase.from("integrations").delete().eq("provider", provider).eq("user_id", user.id);
+    setToast(`🗑️ ${provider} déconnecté`);
+    setTimeout(() => setToast(""), 3000);
     await loadIntegrations();
   };
 
   const handleSync = async (provider: string) => {
-    if (provider !== "strava") return;
-    setSyncing(true);
+    setSyncing(provider);
     try {
-      const res = await fetch("/api/integrations/strava/sync", { method: "POST" });
-      const data = await res.json();
-      setToast(`✅ ${data.synced} activités synchronisées !`);
-      setTimeout(() => setToast(""), 4000);
+      const res = await fetch(`/api/integrations/${provider}/sync`, { method: "POST" });
+      if (res.ok) {
+        const data = await res.json();
+        setToast(`✅ ${data.synced} activités synchronisées depuis ${provider} !`);
+      } else {
+        setToast(`❌ Erreur de sync ${provider}`);
+      }
     } catch {
-      setToast("❌ Erreur de synchronisation");
-      setTimeout(() => setToast(""), 4000);
+      setToast(`❌ Erreur de sync ${provider}`);
     }
-    setSyncing(false);
+    setTimeout(() => setToast(""), 4000);
+    setSyncing(null);
+    await loadIntegrations();
   };
 
   const handleLogout = async () => {
@@ -75,26 +87,37 @@ function SettingsContent() {
       <h1 className="text-2xl font-bold mb-6" style={{ fontFamily: "var(--font-display)" }}>⚙️ Réglages</h1>
 
       {toast && (
-        <div className="mb-4 p-3 rounded-xl text-sm" style={{ background: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}>
+        <div className="mb-4 p-3 rounded-xl text-sm animate-pulse" style={{ background: "var(--color-surface-2)", border: "1px solid var(--color-border)" }}>
           {toast}
         </div>
       )}
 
       <div className="p-6 rounded-2xl mb-6" style={{ background: "var(--color-surface)", border: "1px solid var(--color-border)" }}>
-        <h2 className="text-lg font-semibold mb-4" style={{ fontFamily: "var(--font-display)" }}>Connexions</h2>
+        <h2 className="text-lg font-semibold mb-2" style={{ fontFamily: "var(--font-display)" }}>Connexions</h2>
+        <p className="text-sm mb-4" style={{ color: "var(--color-text-muted)" }}>
+          Connecte tes apps sportives pour synchroniser automatiquement tes activités.
+        </p>
         <div className="space-y-3">
           {connectors.map((c) => {
             const connected = isConnected(c.provider);
             const integration = getIntegration(c.provider);
+            const isAppleHealth = c.provider === "apple_health";
             return (
               <div key={c.provider} className="flex items-center justify-between p-3 rounded-xl" style={{ background: "var(--color-surface-2)" }}>
                 <div className="flex items-center gap-3">
                   <span className="text-xl">{c.icon}</span>
                   <div>
-                    <span className="font-medium text-sm">{c.name}</span>
+                    <div className="flex items-center gap-2">
+                      <span className="font-medium text-sm">{c.name}</span>
+                      {connected && (
+                        <span className="text-xs px-1.5 py-0.5 rounded-full" style={{ background: "rgba(34,197,94,0.15)", color: "var(--color-success)" }}>
+                          Connecté
+                        </span>
+                      )}
+                    </div>
                     {connected && integration?.last_sync_at && (
                       <p className="text-xs mt-0.5" style={{ color: "var(--color-text-muted)" }}>
-                        Sync : {new Date(integration.last_sync_at).toLocaleDateString("fr")}
+                        Dernière sync : {new Date(integration.last_sync_at).toLocaleDateString("fr-FR", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
                       </p>
                     )}
                   </div>
@@ -102,25 +125,35 @@ function SettingsContent() {
                 <div className="flex items-center gap-2">
                   {connected ? (
                     <>
-                      <button onClick={() => handleSync(c.provider)} disabled={syncing} className="px-3 py-1.5 rounded-lg text-xs font-medium transition" style={{ background: "var(--color-accent)", color: "white" }}>
-                        {syncing ? "Sync..." : "Sync"}
-                      </button>
-                      <button onClick={() => handleDisconnect(c.provider)} className="px-3 py-1.5 rounded-lg text-xs font-medium transition" style={{ border: "1px solid var(--color-danger)", color: "var(--color-danger)" }}>
+                      {c.provider === "strava" && (
+                        <button
+                          onClick={() => handleSync(c.provider)}
+                          disabled={syncing === c.provider}
+                          className="px-3 py-1.5 rounded-lg text-xs font-medium transition"
+                          style={{ background: "var(--color-accent)", color: "white" }}
+                        >
+                          {syncing === c.provider ? "⏳ Sync..." : "🔄 Sync"}
+                        </button>
+                      )}
+                      <button
+                        onClick={() => handleDisconnect(c.provider)}
+                        className="px-3 py-1.5 rounded-lg text-xs font-medium transition hover:opacity-80"
+                        style={{ border: "1px solid var(--color-danger)", color: "var(--color-danger)" }}
+                      >
                         Déconnecter
                       </button>
                     </>
+                  ) : isAppleHealth ? (
+                    <span className="text-xs px-3 py-1.5 rounded-lg" style={{ color: "var(--color-text-muted)", border: "1px solid var(--color-border)" }}>
+                      App iOS requise
+                    </span>
                   ) : (
                     <button
-                      onClick={() => c.available && handleConnect(c.provider)}
-                      className="px-4 py-1.5 rounded-lg text-xs font-medium transition"
-                      style={{
-                        border: `1px solid ${c.available ? "var(--color-accent)" : "var(--color-border)"}`,
-                        color: c.available ? "var(--color-accent)" : "var(--color-text-muted)",
-                        cursor: c.available ? "pointer" : "not-allowed",
-                        opacity: c.available ? 1 : 0.5,
-                      }}
+                      onClick={() => handleConnect(c.provider)}
+                      className="px-4 py-1.5 rounded-lg text-xs font-medium transition hover:opacity-80"
+                      style={{ border: "1px solid var(--color-accent)", color: "var(--color-accent)" }}
                     >
-                      {c.available ? "Connecter" : "Bientôt"}
+                      Connecter
                     </button>
                   )}
                 </div>
@@ -143,7 +176,7 @@ function SettingsContent() {
         </div>
       </div>
 
-      <button onClick={handleLogout} className="px-4 py-2 rounded-xl text-sm transition" style={{ border: "1px solid var(--color-danger)", color: "var(--color-danger)" }}>
+      <button onClick={handleLogout} className="px-4 py-2 rounded-xl text-sm transition hover:opacity-80" style={{ border: "1px solid var(--color-danger)", color: "var(--color-danger)" }}>
         Se déconnecter
       </button>
     </div>
@@ -152,7 +185,7 @@ function SettingsContent() {
 
 export default function SettingsPage() {
   return (
-    <Suspense fallback={<div style={{ color: "var(--color-text-muted)" }}>Chargement...</div>}>
+    <Suspense fallback={<div className="p-8" style={{ color: "var(--color-text-muted)" }}>Chargement des réglages...</div>}>
       <SettingsContent />
     </Suspense>
   );
