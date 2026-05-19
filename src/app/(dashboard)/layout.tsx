@@ -7,6 +7,7 @@ const navItems = [
   { href: "/chat", label: "Coach IA", icon: "🤖" },
   { href: "/analytics", label: "Analytics", icon: "📈" },
   { href: "/plans", label: "Plans", icon: "📋" },
+  { href: "/coach", label: "Mes Athlètes", icon: "🏋️" },
   { href: "/settings", label: "Réglages", icon: "⚙️" },
 ];
 
@@ -14,6 +15,14 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) redirect("/login");
+
+  const { data: profile } = await supabase
+    .from("profiles")
+    .select("full_name, plan:subscriptions(plan)")
+    .eq("id", user.id)
+    .single();
+
+  const planLabel = (profile as unknown as { plan: { plan: string }[] })?.plan?.[0]?.plan || "free";
 
   return (
     <div className="flex min-h-screen" style={{ background: "var(--color-bg)" }}>
@@ -30,8 +39,10 @@ export default async function DashboardLayout({ children }: { children: React.Re
           ))}
         </nav>
         <div className="px-3 py-3 rounded-xl mt-auto" style={{ background: "var(--color-surface-2)" }}>
-          <p className="text-sm font-medium truncate">{user.email}</p>
-          <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>Free Plan</p>
+          <p className="text-sm font-medium truncate">{(profile as unknown as { full_name: string })?.full_name || user.email}</p>
+          <p className="text-xs mt-1" style={{ color: "var(--color-text-muted)" }}>
+            Plan {planLabel.charAt(0).toUpperCase() + planLabel.slice(1)}
+          </p>
         </div>
       </aside>
       <main className="flex-1 overflow-auto">
